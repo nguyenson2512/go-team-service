@@ -9,6 +9,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"team-service/models"
 	"team-service/routes"
 )
 
@@ -29,6 +30,11 @@ func main() {
 		log.Fatal("failed to connect database: ", err)
 	}
 
+	err = db.AutoMigrate(&models.Folder{})
+	if err != nil {
+		log.Fatal("failed to migrate database: ", err)
+	}
+
 	r := gin.Default()
 
 	r.Use(func(c *gin.Context) {
@@ -37,6 +43,7 @@ func main() {
 	})
 
 	routes.RegisterTeamRoutes(r)
+	routes.RegisterAssetRoutes(r)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
