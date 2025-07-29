@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"team-service/utils"
+	"time"
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gin-gonic/gin"
@@ -43,15 +44,27 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Extract claims
-		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			c.Set("userId", claims["userId"])
-			c.Set("role", claims["role"])
-		} else {
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
 			return
 		}
 
+		// Check token expiration
+		if exp, ok := claims["exp"].(float64); !ok || int64(exp) < time.Now().Unix() {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Token has expired"})
+			return
+		}
+
+		// Check required claims
+		userId, ok1 := claims["userId"].(string)
+		role, ok2 := claims["role"].(string)
+		if !ok1 || !ok2 || userId == "" || role == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Missing or invalid user claims"})
+			return
+		}
+		c.Set("userId", userId)
+		c.Set("role", role)
 		c.Next()
 	}
 }
