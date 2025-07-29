@@ -30,7 +30,7 @@ func main() {
 		log.Fatal("failed to connect database: ", err)
 	}
 
-	err = db.AutoMigrate(&models.Folder{})
+	err = db.AutoMigrate(&models.Folder{}, &models.Note{}, &models.FolderShare{}, &models.NoteShare{})
 	if err != nil {
 		log.Fatal("failed to migrate database: ", err)
 	}
