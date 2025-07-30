@@ -9,278 +9,17 @@ import (
 	"gorm.io/gorm"
 )
 
-type CreateFolderPayload struct {
-	Name string `json:"name" binding:"required"`
-}
-
-// Folder CRUD
-func CreateFolder(c *gin.Context) {
-	db := c.MustGet("db").(*gorm.DB)
-	userId := c.GetString("userId")
-	var payload CreateFolderPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	folder := models.Folder{
-		Name:    payload.Name,
-		OwnerID: userId,
-	}
-
-	if err := db.Create(&folder).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create folder"})
-		return
-	}
-	c.JSON(http.StatusCreated, folder)
-}
-
-func GetFolder(c *gin.Context) {
-	db := c.MustGet("db").(*gorm.DB)
-	userId := c.GetString("userId")
-	folderId := c.Param("folderId")
-
-	var folder models.Folder
-
-	err := db.Preload("Notes").
-		Where(`
-			id = ? AND (
-				owner_id = ? OR 
-				id IN (SELECT folder_id FROM folder_shares WHERE user_id = ?)
-			)
-		`, folderId, userId, userId).
-		First(&folder).Error
-
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Folder not found or access denied"})
-		return
-	}
-
-	c.JSON(http.StatusOK, folder)
-}
-
-type UpdateFolderPayload struct {
-	Name string `json:"name" binding:"required"`
-}
-
-func UpdateFolder(c *gin.Context) {
-	db := c.MustGet("db").(*gorm.DB)
-	userId := c.GetString("userId")
-	folderId := c.Param("folderId")
-
-	var payload UpdateFolderPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var folder models.Folder
-	if err := db.First(&folder, "id = ? AND owner_id = ?", folderId, userId).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Not authorized or folder not found"})
-		return
-	}
-
-	folder.Name = payload.Name
-	if err := db.Save(&folder).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update folder"})
-		return
-	}
-
-	c.JSON(http.StatusOK, folder)
-}
-
-func DeleteFolder(c *gin.Context) {
-	db := c.MustGet("db").(*gorm.DB)
-	userId := c.GetString("userId")
-	folderId := c.Param("folderId")
-
-	var folder models.Folder
-	if err := db.First(&folder, "id = ? AND owner_id = ?", folderId, userId).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Not authorized or folder not found"})
-		return
-	}
-
-	err := db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec(`
-			DELETE FROM note_shares 
-			WHERE note_id IN (SELECT id FROM notes WHERE folder_id = ?)
-		`, folder.ID).Error; err != nil {
-			return err
-		}
-
-		if err := tx.Where("folder_id = ?", folder.ID).Delete(&models.Note{}).Error; err != nil {
-			return err
-		}
-
-		if err := tx.Where("folder_id = ?", folder.ID).Delete(&models.FolderShare{}).Error; err != nil {
-			return err
-		}
-
-		if err := tx.Delete(&folder).Error; err != nil {
-			return err
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete folder and notes: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Folder and its notes deleted successfully"})
-}
-
-type CreateNotePayload struct {
-	Title string `json:"title" binding:"required"`
-	Body  string `json:"body" binding:"required"`
-}
-
-// Note CRUD
-func CreateNote(c *gin.Context) {
-	db := c.MustGet("db").(*gorm.DB)
-	userId := c.GetString("userId")
-	folderIdParam := c.Param("folderId")
-
-	var payload CreateNotePayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var folder models.Folder
-	if err := db.First(&folder, "id = ? AND owner_id = ?", folderIdParam, userId).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Folder not found or access denied"})
-		return
-	}
-
-	note := models.Note{
-		Title:    payload.Title,
-		Body:     payload.Body,
-		FolderID: folder.ID,
-		OwnerID:  userId,
-	}
-
-	if err := db.Create(&note).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create note"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, note)
-}
-
-func GetNote(c *gin.Context) {
-	db := c.MustGet("db").(*gorm.DB)
-	userId := c.GetString("userId")
-	noteId := c.Param("noteId")
-
-	var note models.Note
-
-	err := db.
-		Where(`
-			id = ? AND (
-				owner_id = ? OR 
-				id IN (SELECT note_id FROM note_shares WHERE user_id = ?)
-			)
-		`, noteId, userId, userId).
-		First(&note).Error
-
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Note not found or access denied"})
-		return
-	}
-
-	c.JSON(http.StatusOK, note)
-}
-
-type UpdateNotePayload struct {
-	Title string `json:"title" binding:"required"`
-	Body  string `json:"body" binding:"required"`
-}
-
-func UpdateNote(c *gin.Context) {
-	db := c.MustGet("db").(*gorm.DB)
-	userId := c.GetString("userId")
-	noteId := c.Param("noteId")
-
-	var payload UpdateNotePayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var note models.Note
-	if err := db.First(&note, "id = ?", noteId).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Note not found"})
-		return
-	}
-
-	// Check ownership or write access
-	if note.OwnerID != userId {
-		var share models.NoteShare
-		if err := db.First(&share, "note_id = ? AND user_id = ?", note.ID, userId).Error; err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
-			return
-		}
-		if share.Access != "write" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Write permission required"})
-			return
-		}
-	}
-
-	note.Title = payload.Title
-	note.Body = payload.Body
-
-	if err := db.Save(&note).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update note"})
-		return
-	}
-
-	c.JSON(http.StatusOK, note)
-}
-
-func DeleteNote(c *gin.Context) {
-	db := c.MustGet("db").(*gorm.DB)
-	userId := c.GetString("userId")
-	noteId := c.Param("noteId")
-
-	var note models.Note
-	if err := db.First(&note, "id = ?", noteId).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Note not found"})
-		return
-	}
-
-	if note.OwnerID != userId {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only owner can delete the note"})
-		return
-	}
-
-	err := db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("note_id = ?", note.ID).Delete(&models.NoteShare{}).Error; err != nil {
-			return err
-		}
-
-		if err := tx.Delete(&note).Error; err != nil {
-			return err
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete note: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Note deleted successfully"})
-}
-
 type ShareFolderPayload struct {
 	UserID string `json:"userId" binding:"required"`
 	Access string `json:"access" binding:"required,oneof=read write"`
 }
 
-// Sharing APIs
+type ShareNotePayload struct {
+	UserID string `json:"userId" binding:"required"`
+	Access string `json:"access" binding:"required,oneof=read write"`
+}
+
+// ShareFolder shares a folder with another user
 func ShareFolder(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
 	userId := c.GetString("userId")
@@ -370,6 +109,7 @@ func ShareFolder(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Folder shared successfully"})
 }
 
+// RevokeFolderShare revokes folder access from a user
 func RevokeFolderShare(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
 	requesterId := c.GetString("userId")
@@ -396,11 +136,7 @@ func RevokeFolderShare(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Folder access revoked"})
 }
 
-type ShareNotePayload struct {
-	UserID string `json:"userId" binding:"required"`
-	Access string `json:"access" binding:"required,oneof=read write"`
-}
-
+// ShareNote shares a note with another user
 func ShareNote(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
 	userId := c.GetString("userId")
@@ -449,6 +185,7 @@ func ShareNote(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Note shared successfully"})
 }
 
+// RevokeNoteShare revokes note access from a user
 func RevokeNoteShare(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
 	userId := c.GetString("userId")
@@ -475,7 +212,7 @@ func RevokeNoteShare(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Access revoked"})
 }
 
-// Manager APIs
+// GetTeamAssets retrieves all assets for a team (manager API)
 func GetTeamAssets(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
 
@@ -526,6 +263,7 @@ func GetTeamAssets(c *gin.Context) {
 	})
 }
 
+// GetUserAssets retrieves all assets for a specific user (manager API)
 func GetUserAssets(c *gin.Context) {
 	db := c.MustGet("db").(*gorm.DB)
 	targetUserId := c.Param("userId")
