@@ -2,13 +2,16 @@ package main
 
 import (
 	"log"
+	httpstd "net/http"
 	"os"
+	"time"
 
 	"team-service/internal/delivery/http"
 	"team-service/internal/delivery/http/handlers"
 	"team-service/internal/repository"
 	"team-service/internal/usecases"
 	"team-service/pkg/db"
+	"team-service/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -27,6 +30,8 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to setup database: ", err)
 	}
+
+	log := logger.SetupLogger()
 
 	// Initialize repositories
 	folderRepo := repository.NewFolderRepository(database)
@@ -51,6 +56,36 @@ func main() {
 
 	// Setup Gin engine
 	r := gin.Default()
+
+	r.Use(func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		latency := time.Since(start)
+
+		log.Info().
+			Str("method", c.Request.Method).
+			Str("path", c.Request.URL.Path).
+			Int("status", c.Writer.Status()).
+			Dur("latency", latency).
+			Msg("Incoming request")
+	})
+
+	r.GET("/ping", func(c *gin.Context) {
+		log.Info().Msg("Ping endpoint called")
+		c.JSON(httpstd.StatusOK, gin.H{"message": "pong"})
+	})
+
+	// Simulated Success
+	r.GET("/success", func(c *gin.Context) {
+		log.Info().Msg("Success endpoint called")
+		c.JSON(httpstd.StatusOK, gin.H{"status": "success"})
+	})
+
+	// Simulated Failure
+	r.GET("/fail", func(c *gin.Context) {
+		log.Error().Msg("Failure endpoint called")
+		c.JSON(httpstd.StatusInternalServerError, gin.H{"status": "error"})
+	})
 
 	// Add database to context
 	r.Use(func(c *gin.Context) {

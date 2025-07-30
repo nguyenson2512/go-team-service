@@ -1,39 +1,27 @@
 package logger
 
 import (
-	"log"
+	// "net/http"
 	"os"
+	// "time"
+
+	// "github.com/gin-gonic/gin"
+	"github.com/rs/zerolog"
+	// "github.com/rs/zerolog/log"
 )
 
-// Logger provides logging functionality
-type Logger struct {
-	*log.Logger
-}
+var logger zerolog.Logger
 
-// New creates a new logger instance
-func New() *Logger {
-	return &Logger{
-		Logger: log.New(os.Stdout, "[TEAM-SERVICE] ", log.LstdFlags|log.Lshortfile),
+func SetupLogger() zerolog.Logger {
+	os.MkdirAll("logs", os.ModePerm)
+
+	file, err := os.OpenFile("/var/log/app/app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		panic(err)
 	}
-}
 
-// Info logs an info message
-func (l *Logger) Info(msg string) {
-	l.Printf("INFO: %s", msg)
-}
+	multi := zerolog.MultiLevelWriter(os.Stdout, file)
 
-// Error logs an error message
-func (l *Logger) Error(msg string) {
-	l.Printf("ERROR: %s", msg)
-}
-
-// Debug logs a debug message
-func (l *Logger) Debug(msg string) {
-	l.Printf("DEBUG: %s", msg)
-}
-
-// Fatal logs a fatal message and exits
-func (l *Logger) Fatal(msg string) {
-	l.Printf("FATAL: %s", msg)
-	os.Exit(1)
+	logger := zerolog.New(multi).With().Timestamp().Logger()
+	return logger
 }
