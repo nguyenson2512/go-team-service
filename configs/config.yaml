@@ -1,0 +1,12 @@
+server:
+  port: ":8080"
+  
+database:
+  dsn: "${DATABASE_DSN}"
+  
+auth:
+  access_token_secret: "${ACCESS_TOKEN_SECRET}"
+  
+logging:
+  level: "info"
+  format: "json"
