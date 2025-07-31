@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"team-service/internal/usecases"
+	"team-service/pkg/logger"
 	"team-service/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +48,7 @@ func (h *NoteHandler) CreateNote(c *gin.Context) {
 
 	note, err := h.noteService.CreateNote(req.Title, req.Body, uint(folderID), userID)
 	if err != nil {
+		logger.Logger.Error().Msg("Failed to create note")
 		response.Error(c, http.StatusForbidden, err.Error())
 		return
 	}

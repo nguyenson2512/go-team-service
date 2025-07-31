@@ -1,18 +1,14 @@
 package logger
 
 import (
-	// "net/http"
 	"os"
-	// "time"
 
-	// "github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
-	// "github.com/rs/zerolog/log"
 )
 
-var logger zerolog.Logger
+var Logger zerolog.Logger
 
-func SetupLogger() zerolog.Logger {
+func SetupLogger() {
 	os.MkdirAll("logs", os.ModePerm)
 
 	file, err := os.OpenFile("/var/log/app/app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -22,6 +18,5 @@ func SetupLogger() zerolog.Logger {
 
 	multi := zerolog.MultiLevelWriter(os.Stdout, file)
 
-	logger := zerolog.New(multi).With().Timestamp().Logger()
-	return logger
+	Logger = zerolog.New(multi).With().Timestamp().Logger()
 }

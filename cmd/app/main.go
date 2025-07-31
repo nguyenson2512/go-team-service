@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	httpstd "net/http"
 	"os"
 	"time"
 
@@ -31,7 +30,7 @@ func main() {
 		log.Fatal("Failed to setup database: ", err)
 	}
 
-	log := logger.SetupLogger()
+	logger.SetupLogger()
 
 	// Initialize repositories
 	folderRepo := repository.NewFolderRepository(database)
@@ -62,29 +61,12 @@ func main() {
 		c.Next()
 		latency := time.Since(start)
 
-		log.Info().
+		logger.Logger.Info().
 			Str("method", c.Request.Method).
 			Str("path", c.Request.URL.Path).
 			Int("status", c.Writer.Status()).
 			Dur("latency", latency).
 			Msg("Incoming request")
-	})
-
-	r.GET("/ping", func(c *gin.Context) {
-		log.Info().Msg("Ping endpoint called")
-		c.JSON(httpstd.StatusOK, gin.H{"message": "pong"})
-	})
-
-	// Simulated Success
-	r.GET("/success", func(c *gin.Context) {
-		log.Info().Msg("Success endpoint called")
-		c.JSON(httpstd.StatusOK, gin.H{"status": "success"})
-	})
-
-	// Simulated Failure
-	r.GET("/fail", func(c *gin.Context) {
-		log.Error().Msg("Failure endpoint called")
-		c.JSON(httpstd.StatusInternalServerError, gin.H{"status": "error"})
 	})
 
 	// Add database to context

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"team-service/internal/usecases"
 	"team-service/pkg/response"
+	"team-service/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 )
@@ -38,6 +39,7 @@ func (h *FolderHandler) CreateFolder(c *gin.Context) {
 
 	folder, err := h.folderService.CreateFolder(req.Name, userID)
 	if err != nil {
+		logger.Logger.Error().Msg("Failed to create folder")
 		response.Error(c, http.StatusInternalServerError, "Failed to create folder")
 		return
 	}
