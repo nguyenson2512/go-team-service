@@ -10,3 +10,7 @@ auth:
 logging:
   level: "info"
   format: "json"
+
+kafka:
+  brokers: ["localhost:9092"]
+  teamActivityTopic: "team.activity"

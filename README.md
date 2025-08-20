@@ -28,6 +28,23 @@ This project has been refactored to follow Clean Architecture principles, provid
 - External concerns like database, logging, middleware
 - Shared utilities across the application
 
+## Kafka Integration
+
+This service now integrates with Kafka to emit events whenever team data changes. Events are sent to the `team.activity` topic with the following event types:
+
+- `TEAM_CREATED` - When a new team is created
+- `MEMBER_ADDED` - When a member is added to a team
+- `MEMBER_REMOVED` - When a member is removed from a team
+- `MANAGER_ADDED` - When a manager is added to a team
+- `MANAGER_REMOVED` - When a manager is removed from a team
+
+Each event includes:
+- `eventType` - The type of event that occurred
+- `teamId` - The ID of the team affected
+- `performedBy` - The ID of the user who performed the action
+- `targetUserId` - The ID of the user affected (for member/manager events)
+- `timestamp` - When the event occurred (ISO-8601 format)
+
 ## API Endpoints
 
 All endpoints remain the same as before:
@@ -67,6 +84,8 @@ Create a `.env` file with the following variables:
 DATABASE_DSN=postgres://user:password@localhost:5432/teamservice?sslmode=disable
 ACCESS_TOKEN_SECRET=your-secret-key-here
 PORT=:8080
+KAFKA_BROKERS=localhost:9092
+KAFKA_TEAM_ACTIVITY_TOPIC=team.activity
 ```
 
 ## Running the Application

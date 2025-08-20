@@ -43,7 +43,14 @@ func (h *TeamHandler) CreateTeam(c *gin.Context) {
 		return
 	}
 
-	result, err := h.teamService.CreateTeam(req.TeamName, req.Managers, req.Members)
+	// Extract user ID from context
+	performedBy := c.GetString("userId")
+	if performedBy == "" {
+		response.Error(c, http.StatusUnauthorized, "User not authenticated")
+		return
+	}
+
+	result, err := h.teamService.CreateTeam(req.TeamName, req.Managers, req.Members, performedBy)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "Failed to create team")
 		return
@@ -66,7 +73,14 @@ func (h *TeamHandler) AddMember(c *gin.Context) {
 		return
 	}
 
-	err = h.teamService.AddMember(uint(teamID), req.MemberId)
+	// Extract user ID from context
+	performedBy := c.GetString("userId")
+	if performedBy == "" {
+		response.Error(c, http.StatusUnauthorized, "User not authenticated")
+		return
+	}
+
+	err = h.teamService.AddMember(uint(teamID), req.MemberId, performedBy)
 	if err != nil {
 		response.ErrorWithDetails(c, http.StatusInternalServerError, "Failed to add member", err.Error())
 		return
@@ -85,7 +99,14 @@ func (h *TeamHandler) DeleteMember(c *gin.Context) {
 		return
 	}
 
-	err = h.teamService.DeleteMember(uint(teamID), memberID)
+	// Extract user ID from context
+	performedBy := c.GetString("userId")
+	if performedBy == "" {
+		response.Error(c, http.StatusUnauthorized, "User not authenticated")
+		return
+	}
+
+	err = h.teamService.DeleteMember(uint(teamID), memberID, performedBy)
 	if err != nil {
 		response.ErrorWithDetails(c, http.StatusInternalServerError, "Failed to remove member", err.Error())
 		return
@@ -108,7 +129,14 @@ func (h *TeamHandler) AddManager(c *gin.Context) {
 		return
 	}
 
-	err = h.teamService.AddManager(uint(teamID), req.ManagerId)
+	// Extract user ID from context
+	performedBy := c.GetString("userId")
+	if performedBy == "" {
+		response.Error(c, http.StatusUnauthorized, "User not authenticated")
+		return
+	}
+
+	err = h.teamService.AddManager(uint(teamID), req.ManagerId, performedBy)
 	if err != nil {
 		response.ErrorWithDetails(c, http.StatusInternalServerError, "Failed to add manager", err.Error())
 		return
@@ -127,7 +155,14 @@ func (h *TeamHandler) DeleteManager(c *gin.Context) {
 		return
 	}
 
-	err = h.teamService.DeleteManager(uint(teamID), managerID)
+	// Extract user ID from context
+	performedBy := c.GetString("userId")
+	if performedBy == "" {
+		response.Error(c, http.StatusUnauthorized, "User not authenticated")
+		return
+	}
+
+	err = h.teamService.DeleteManager(uint(teamID), managerID, performedBy)
 	if err != nil {
 		response.ErrorWithDetails(c, http.StatusInternalServerError, "Failed to remove manager", err.Error())
 		return
