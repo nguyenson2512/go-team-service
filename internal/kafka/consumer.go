@@ -6,6 +6,7 @@ import (
 	"log"
 	"team-service/internal/entities"
 	"team-service/internal/repository"
+	"team-service/pkg/cache"
 
 	"github.com/segmentio/kafka-go"
 )
@@ -14,10 +15,11 @@ import (
 type TeamEventConsumer struct {
 	reader    *kafka.Reader
 	eventRepo repository.TeamEventRepository
+	teamCache cache.TeamCache
 }
 
 // NewTeamEventConsumer creates a new Kafka consumer for team events
-func NewTeamEventConsumer(brokers []string, topic string, groupID string, eventRepo repository.TeamEventRepository) *TeamEventConsumer {
+func NewTeamEventConsumer(brokers []string, topic string, groupID string, eventRepo repository.TeamEventRepository, teamCache cache.TeamCache) *TeamEventConsumer {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: brokers,
 		Topic:   topic,
@@ -27,6 +29,7 @@ func NewTeamEventConsumer(brokers []string, topic string, groupID string, eventR
 	return &TeamEventConsumer{
 		reader:    reader,
 		eventRepo: eventRepo,
+		teamCache: teamCache,
 	}
 }
 
@@ -66,6 +69,22 @@ func (c *TeamEventConsumer) Consume(ctx context.Context) {
 			}
 			if err := c.eventRepo.Create(record); err != nil {
 				log.Printf("Failed to persist team event: %v", err)
+			}
+
+			// Update cache for member changes
+			switch event.EventType {
+			case MemberAdded:
+				if c.teamCache != nil && event.TargetUserId != "" {
+					if err := c.teamCache.AddTeamMember(ctx, event.TeamId, event.TargetUserId); err != nil {
+						log.Printf("Failed to add member to cache: %v", err)
+					}
+				}
+			case MemberRemoved:
+				if c.teamCache != nil && event.TargetUserId != "" {
+					if err := c.teamCache.RemoveTeamMember(ctx, event.TeamId, event.TargetUserId); err != nil {
+						log.Printf("Failed to remove member from cache: %v", err)
+					}
+				}
 			}
 		}
 	}

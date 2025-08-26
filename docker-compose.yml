@@ -12,11 +12,19 @@ services:
     environment:
       - KAFKA_BROKERS=kafka:9092
       - KAFKA_TEAM_ACTIVITY_TOPIC=team.activity
+      - REDIS_ADDR=redis:6379
     depends_on:
       - postgres-personnel
       - loki
       - promtail
       - kafka
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
 
   postgres-personnel:
     image: postgres:15

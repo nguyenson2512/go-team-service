@@ -1,9 +1,12 @@
 package usecases
 
 import (
+	"context"
 	"errors"
 	"team-service/internal/entities"
 	"team-service/internal/repository"
+	"team-service/pkg/cache"
+
 
 	"gorm.io/gorm"
 )
@@ -22,15 +25,17 @@ type shareService struct {
 	folderRepo repository.FolderRepository
 	noteRepo   repository.NoteRepository
 	teamRepo   repository.TeamRepository
+	cache      cache.TeamCache
 	db         *gorm.DB
 }
 
-func NewShareService(shareRepo repository.ShareRepository, folderRepo repository.FolderRepository, noteRepo repository.NoteRepository, teamRepo repository.TeamRepository, db *gorm.DB) ShareService {
+func NewShareService(shareRepo repository.ShareRepository, folderRepo repository.FolderRepository, noteRepo repository.NoteRepository, teamRepo repository.TeamRepository, cache cache.TeamCache, db *gorm.DB) ShareService {
 	return &shareService{
 		shareRepo:  shareRepo,
 		folderRepo: folderRepo,
 		noteRepo:   noteRepo,
 		teamRepo:   teamRepo,
+		cache:      cache,
 		db:         db,
 	}
 }
@@ -161,10 +166,33 @@ func (s *shareService) RevokeNoteShare(noteID uint, targetUserID, ownerID string
 }
 
 func (s *shareService) GetTeamAssets(teamID uint) (map[string]interface{}, error) {
-	userIds, err := s.teamRepo.GetUsersByTeamID(teamID)
-	if err != nil {
-		return nil, errors.New("failed to fetch team members")
+	ctx := context.Background()
+	var userIds []string
+
+	if s.cache != nil {
+		members, err := s.cache.GetTeamMembers(ctx, teamID)
+		if err == nil && len(members) > 0 {
+			userIds = members
+		} else {
+			// Fallback to DB and backfill cache
+			dbMembers, err := s.teamRepo.GetUsersByTeamID(teamID)
+			if err != nil {
+				return nil, errors.New("failed to fetch team members")
+			}
+			userIds = dbMembers
+
+			if len(dbMembers) > 0 {
+				_ = s.cache.SetTeamMembers(ctx, teamID, dbMembers)
+			}
+		}
+	} else {
+		var err error
+		userIds, err = s.teamRepo.GetUsersByTeamID(teamID)
+		if err != nil {
+			return nil, errors.New("failed to fetch team members")
+		}
 	}
+
 
 	if len(userIds) == 0 {
 		return map[string]interface{}{

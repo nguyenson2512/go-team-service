@@ -12,6 +12,7 @@ import (
 	kafka "team-service/internal/kafka"
 	"team-service/internal/repository"
 	"team-service/internal/usecases"
+	"team-service/pkg/cache"
 	"team-service/pkg/db"
 	"team-service/pkg/logger"
 
@@ -50,9 +51,16 @@ func main() {
 	kafkaProducer := kafka.NewTeamEventProducer(kafkaBrokersList, kafkaTopic)
 	defer kafkaProducer.Close()
 
+	// Initialize Redis cache
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "redis:6379"
+	}
+	teamCache := cache.NewRedisTeamCache(redisAddr, "", 0)
+
 	// Initialize Kafka consumer
 	eventRepo := repository.NewTeamEventRepository(database)
-	kafkaConsumer := kafka.NewTeamEventConsumer(kafkaBrokersList, kafkaTopic, "team-service-consumer", eventRepo)
+	kafkaConsumer := kafka.NewTeamEventConsumer(kafkaBrokersList, kafkaTopic, "team-service-consumer", eventRepo, teamCache)
 	defer kafkaConsumer.Close()
 
 	// Start consumer in a goroutine
@@ -67,7 +75,7 @@ func main() {
 	// Initialize use cases/services
 	folderService := usecases.NewFolderService(folderRepo, noteRepo, shareRepo, database)
 	noteService := usecases.NewNoteService(noteRepo, folderRepo, shareRepo, database)
-	shareService := usecases.NewShareService(shareRepo, folderRepo, noteRepo, teamRepo, database)
+	shareService := usecases.NewShareService(shareRepo, folderRepo, noteRepo, teamRepo, teamCache, database)
 	teamService := usecases.NewTeamService(teamRepo, kafkaProducer)
 
 	// Initialize handlers
