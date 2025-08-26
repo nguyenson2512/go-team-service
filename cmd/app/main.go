@@ -51,7 +51,8 @@ func main() {
 	defer kafkaProducer.Close()
 
 	// Initialize Kafka consumer
-	kafkaConsumer := kafka.NewTeamEventConsumer(kafkaBrokersList, kafkaTopic, "team-service-consumer")
+	eventRepo := repository.NewTeamEventRepository(database)
+	kafkaConsumer := kafka.NewTeamEventConsumer(kafkaBrokersList, kafkaTopic, "team-service-consumer", eventRepo)
 	defer kafkaConsumer.Close()
 
 	// Start consumer in a goroutine

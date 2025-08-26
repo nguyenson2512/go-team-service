@@ -4,17 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"team-service/internal/entities"
+	"team-service/internal/repository"
 
 	"github.com/segmentio/kafka-go"
 )
 
 // TeamEventConsumer represents a Kafka consumer for team events
 type TeamEventConsumer struct {
-	reader *kafka.Reader
+	reader    *kafka.Reader
+	eventRepo repository.TeamEventRepository
 }
 
 // NewTeamEventConsumer creates a new Kafka consumer for team events
-func NewTeamEventConsumer(brokers []string, topic string, groupID string) *TeamEventConsumer {
+func NewTeamEventConsumer(brokers []string, topic string, groupID string, eventRepo repository.TeamEventRepository) *TeamEventConsumer {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: brokers,
 		Topic:   topic,
@@ -22,7 +25,8 @@ func NewTeamEventConsumer(brokers []string, topic string, groupID string) *TeamE
 	})
 
 	return &TeamEventConsumer{
-		reader: reader,
+		reader:    reader,
+		eventRepo: eventRepo,
 	}
 }
 
@@ -51,15 +55,18 @@ func (c *TeamEventConsumer) Consume(ctx context.Context) {
 				continue
 			}
 
-			// Log the event (in a real implementation, this would send to ElasticSearch)
 			log.Printf("Received team event: %+v", event)
 
-			// In a real implementation, you would send this to ElasticSearch here
-			// For example:
-			// err = sendToElasticSearch(event)
-			// if err != nil {
-			//     log.Printf("Error sending event to ElasticSearch: %v", err)
-			// }
+			record := &entities.TeamEventRecord{
+				EventType:    string(event.EventType),
+				TeamId:       event.TeamId,
+				PerformedBy:  event.PerformedBy,
+				TargetUserId: event.TargetUserId,
+				Timestamp:    event.Timestamp,
+			}
+			if err := c.eventRepo.Create(record); err != nil {
+				log.Printf("Failed to persist team event: %v", err)
+			}
 		}
 	}
 }
@@ -68,9 +75,3 @@ func (c *TeamEventConsumer) Consume(ctx context.Context) {
 func (c *TeamEventConsumer) Close() error {
 	return c.reader.Close()
 }
-
-// sendToElasticSearch would send the event to ElasticSearch in a real implementation
-// func sendToElasticSearch(event TeamEvent) error {
-//     // Implementation would go here
-//     return nil
-// }
