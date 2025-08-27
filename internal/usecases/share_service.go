@@ -1,9 +1,14 @@
 package usecases
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"team-service/internal/entities"
+	"team-service/internal/kafka"
 	"team-service/internal/repository"
+	"team-service/pkg/cache"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -18,20 +23,24 @@ type ShareService interface {
 }
 
 type shareService struct {
-	shareRepo  repository.ShareRepository
-	folderRepo repository.FolderRepository
-	noteRepo   repository.NoteRepository
-	teamRepo   repository.TeamRepository
-	db         *gorm.DB
+	shareRepo     repository.ShareRepository
+	folderRepo    repository.FolderRepository
+	noteRepo      repository.NoteRepository
+	teamRepo      repository.TeamRepository
+	cache         cache.TeamCache
+	assetProducer kafka.AssetEventProducer
+	db            *gorm.DB
 }
 
-func NewShareService(shareRepo repository.ShareRepository, folderRepo repository.FolderRepository, noteRepo repository.NoteRepository, teamRepo repository.TeamRepository, db *gorm.DB) ShareService {
+func NewShareService(shareRepo repository.ShareRepository, folderRepo repository.FolderRepository, noteRepo repository.NoteRepository, teamRepo repository.TeamRepository, cache cache.TeamCache, assetProducer kafka.AssetEventProducer, db *gorm.DB) ShareService {
 	return &shareService{
-		shareRepo:  shareRepo,
-		folderRepo: folderRepo,
-		noteRepo:   noteRepo,
-		teamRepo:   teamRepo,
-		db:         db,
+		shareRepo:     shareRepo,
+		folderRepo:    folderRepo,
+		noteRepo:      noteRepo,
+		teamRepo:      teamRepo,
+		cache:         cache,
+		assetProducer: assetProducer,
+		db:            db,
 	}
 }
 
@@ -50,7 +59,7 @@ func (s *shareService) ShareFolder(folderID uint, targetUserID, access, ownerID 
 	}
 
 	// Transaction: upsert folder share + upsert note shares
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
 		// Handle folder share
 		existingShare, err := s.shareRepo.GetFolderShare(folderID, targetUserID)
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -104,6 +113,27 @@ func (s *shareService) ShareFolder(folderID uint, targetUserID, access, ownerID 
 
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Send asset event for folder sharing
+	if s.assetProducer != nil {
+		event := kafka.AssetEvent{
+			EventType:    kafka.FolderShared,
+			AssetType:    "folder",
+			AssetId:      fmt.Sprintf("%d", folderID),
+			OwnerId:      folder.OwnerID,
+			ActionBy:     ownerID,
+			TargetUserId: targetUserID,
+			AccessType:   access,
+			Timestamp:    time.Now(),
+		}
+		s.assetProducer.ProduceAssetEvent(event)
+	}
+
+	return nil
 }
 
 func (s *shareService) RevokeFolderShare(folderID uint, targetUserID, ownerID string) error {
@@ -116,7 +146,25 @@ func (s *shareService) RevokeFolderShare(folderID uint, targetUserID, ownerID st
 		return errors.New("only the folder owner can revoke access")
 	}
 
-	return s.shareRepo.DeleteFolderShare(folderID, targetUserID)
+	err = s.shareRepo.DeleteFolderShare(folderID, targetUserID)
+	if err != nil {
+		return err
+	}
+
+	// Send asset event for folder unsharing
+	if s.assetProducer != nil {
+		event := kafka.AssetEvent{
+			EventType: kafka.FolderUnshared,
+			AssetType: "folder",
+			AssetId:   fmt.Sprintf("%d", folderID),
+			OwnerId:   folder.OwnerID,
+			ActionBy:  ownerID,
+			Timestamp: time.Now(),
+		}
+		s.assetProducer.ProduceAssetEvent(event)
+	}
+
+	return nil
 }
 
 func (s *shareService) ShareNote(noteID uint, targetUserID, access, ownerID string) error {
@@ -136,15 +184,36 @@ func (s *shareService) ShareNote(noteID uint, targetUserID, access, ownerID stri
 
 	if existingShare != nil {
 		existingShare.Access = access
-		return s.shareRepo.UpdateNoteShare(existingShare)
+		err = s.shareRepo.UpdateNoteShare(existingShare)
 	} else {
 		newShare := &entities.NoteShare{
 			NoteID: noteID,
 			UserID: targetUserID,
 			Access: access,
 		}
-		return s.shareRepo.CreateNoteShare(newShare)
+		err = s.shareRepo.CreateNoteShare(newShare)
 	}
+
+	if err != nil {
+		return err
+	}
+
+	// Send asset event for note sharing
+	if s.assetProducer != nil {
+		event := kafka.AssetEvent{
+			EventType:    kafka.NoteShared,
+			AssetType:    "note",
+			AssetId:      fmt.Sprintf("%d", noteID),
+			OwnerId:      note.OwnerID,
+			ActionBy:     ownerID,
+			TargetUserId: targetUserID,
+			AccessType:   access,
+			Timestamp:    time.Now(),
+		}
+		s.assetProducer.ProduceAssetEvent(event)
+	}
+
+	return nil
 }
 
 func (s *shareService) RevokeNoteShare(noteID uint, targetUserID, ownerID string) error {
@@ -157,13 +226,53 @@ func (s *shareService) RevokeNoteShare(noteID uint, targetUserID, ownerID string
 		return errors.New("only owner can revoke access")
 	}
 
-	return s.shareRepo.DeleteNoteShare(noteID, targetUserID)
+	err = s.shareRepo.DeleteNoteShare(noteID, targetUserID)
+	if err != nil {
+		return err
+	}
+
+	// Send asset event for note unsharing
+	if s.assetProducer != nil {
+		event := kafka.AssetEvent{
+			EventType: kafka.NoteUnshared,
+			AssetType: "note",
+			AssetId:   fmt.Sprintf("%d", noteID),
+			OwnerId:   note.OwnerID,
+			ActionBy:  ownerID,
+			Timestamp: time.Now(),
+		}
+		s.assetProducer.ProduceAssetEvent(event)
+	}
+
+	return nil
 }
 
 func (s *shareService) GetTeamAssets(teamID uint) (map[string]interface{}, error) {
-	userIds, err := s.teamRepo.GetUsersByTeamID(teamID)
-	if err != nil {
-		return nil, errors.New("failed to fetch team members")
+	ctx := context.Background()
+	var userIds []string
+
+	if s.cache != nil {
+		members, err := s.cache.GetTeamMembers(ctx, teamID)
+		if err == nil && len(members) > 0 {
+			userIds = members
+		} else {
+			// Fallback to DB and backfill cache
+			dbMembers, err := s.teamRepo.GetUsersByTeamID(teamID)
+			if err != nil {
+				return nil, errors.New("failed to fetch team members")
+			}
+			userIds = dbMembers
+
+			if len(dbMembers) > 0 {
+				_ = s.cache.SetTeamMembers(ctx, teamID, dbMembers)
+			}
+		}
+	} else {
+		var err error
+		userIds, err = s.teamRepo.GetUsersByTeamID(teamID)
+		if err != nil {
+			return nil, errors.New("failed to fetch team members")
+		}
 	}
 
 	if len(userIds) == 0 {

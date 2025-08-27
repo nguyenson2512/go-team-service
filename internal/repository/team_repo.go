@@ -95,6 +95,10 @@ func (r *teamRepository) IsUserMemberOfTeam(userID string, teamID uint) (bool, e
 
 func (r *teamRepository) GetUsersByTeamID(teamID uint) ([]string, error) {
 	var userIds []string
-	err := r.db.Table("rosters").Where("team_id = ?", teamID).Pluck("user_id", &userIds).Error
+
+	err := r.db.Table(`"Rosters"`).
+		Where(`"teamId" = ?`, teamID).
+		Pluck(`"userId"`, &userIds).Error
+
 	return userIds, err
 }

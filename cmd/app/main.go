@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"team-service/internal/delivery/http"
 	"team-service/internal/delivery/http/handlers"
+	kafka "team-service/internal/kafka"
 	"team-service/internal/repository"
 	"team-service/internal/usecases"
+	"team-service/pkg/cache"
 	"team-service/pkg/db"
 	"team-service/pkg/logger"
 
@@ -32,17 +36,62 @@ func main() {
 
 	logger.SetupLogger()
 
+	// Initialize Kafka producer
+	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
+	if kafkaBrokers == "" {
+		kafkaBrokers = "localhost:9092" // Default Kafka broker
+	}
+	kafkaBrokersList := strings.Split(kafkaBrokers, ",")
+
+	kafkaTopic := os.Getenv("KAFKA_TEAM_ACTIVITY_TOPIC")
+	if kafkaTopic == "" {
+		kafkaTopic = "team.activity" // Default topic
+	}
+
+	assetTopic := os.Getenv("KAFKA_ASSET_ACTIVITY_TOPIC")
+	if assetTopic == "" {
+		assetTopic = "asset.changes" // Default topic
+	}
+
+	kafkaProducer := kafka.NewTeamEventProducer(kafkaBrokersList, kafkaTopic)
+	defer kafkaProducer.Close()
+
+	assetProducer := kafka.NewAssetEventProducer(kafkaBrokersList, assetTopic)
+	defer assetProducer.Close()
+
+	// Initialize Redis cache
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "redis:6379"
+	}
+	teamCache := cache.NewRedisTeamCache(redisAddr, "", 0)
+	assetCache := cache.NewRedisAssetCache(redisAddr, "", 0)
+	accessControlCache := cache.NewRedisAccessControlCache(redisAddr, "", 0)
+
 	// Initialize repositories
 	folderRepo := repository.NewFolderRepository(database)
 	noteRepo := repository.NewNoteRepository(database)
 	shareRepo := repository.NewShareRepository(database)
 	teamRepo := repository.NewTeamRepository(database)
+	eventRepo := repository.NewTeamEventRepository(database)
+	assetEventRepo := repository.NewAssetEventRepository(database)
+
+	// Initialize Kafka consumer
+	kafkaConsumer := kafka.NewTeamEventConsumer(kafkaBrokersList, kafkaTopic, "team-service-consumer", eventRepo, teamCache)
+	defer kafkaConsumer.Close()
+
+	assetConsumer := kafka.NewAssetEventConsumer(kafkaBrokersList, assetTopic, "asset-service-consumer", assetCache, accessControlCache, assetEventRepo)
+	defer assetConsumer.Close()
+
+	// Start consumers in goroutines
+	go kafkaConsumer.Consume(context.Background())
+	go assetConsumer.Consume(context.Background())
 
 	// Initialize use cases/services
-	folderService := usecases.NewFolderService(folderRepo, noteRepo, shareRepo, database)
-	noteService := usecases.NewNoteService(noteRepo, folderRepo, shareRepo, database)
-	shareService := usecases.NewShareService(shareRepo, folderRepo, noteRepo, teamRepo, database)
-	teamService := usecases.NewTeamService(teamRepo)
+	folderService := usecases.NewFolderService(folderRepo, noteRepo, shareRepo, assetCache, accessControlCache, assetProducer, database)
+	noteService := usecases.NewNoteService(noteRepo, folderRepo, shareRepo, assetCache, accessControlCache, assetProducer, database)
+	shareService := usecases.NewShareService(shareRepo, folderRepo, noteRepo, teamRepo, teamCache, assetProducer, database)
+	teamService := usecases.NewTeamService(teamRepo, kafkaProducer)
 
 	// Initialize handlers
 	folderHandler := handlers.NewFolderHandler(folderService)

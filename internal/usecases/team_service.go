@@ -3,28 +3,32 @@ package usecases
 import (
 	"fmt"
 	"team-service/internal/entities"
+	"team-service/internal/kafka"
 	"team-service/internal/repository"
+	"time"
 )
 
 type TeamService interface {
-	CreateTeam(teamName string, managers []entities.Manager, members []entities.Member) (map[string]interface{}, error)
-	AddMember(teamID uint, memberID string) error
-	DeleteMember(teamID uint, memberID string) error
-	AddManager(teamID uint, managerID string) error
-	DeleteManager(teamID uint, managerID string) error
+	CreateTeam(teamName string, managers []entities.Manager, members []entities.Member, performedBy string) (map[string]interface{}, error)
+	AddMember(teamID uint, memberID string, performedBy string) error
+	DeleteMember(teamID uint, memberID string, performedBy string) error
+	AddManager(teamID uint, managerID string, performedBy string) error
+	DeleteManager(teamID uint, managerID string, performedBy string) error
 }
 
 type teamService struct {
-	teamRepo repository.TeamRepository
+	teamRepo      repository.TeamRepository
+	kafkaProducer kafka.TeamEventProducer
 }
 
-func NewTeamService(teamRepo repository.TeamRepository) TeamService {
+func NewTeamService(teamRepo repository.TeamRepository, kafkaProducer kafka.TeamEventProducer) TeamService {
 	return &teamService{
-		teamRepo: teamRepo,
+		teamRepo:      teamRepo,
+		kafkaProducer: kafkaProducer,
 	}
 }
 
-func (s *teamService) CreateTeam(teamName string, managers []entities.Manager, members []entities.Member) (map[string]interface{}, error) {
+func (s *teamService) CreateTeam(teamName string, managers []entities.Manager, members []entities.Member, performedBy string) (map[string]interface{}, error) {
 	team := &entities.Team{
 		TeamName: teamName,
 	}
@@ -54,6 +58,17 @@ func (s *teamService) CreateTeam(teamName string, managers []entities.Manager, m
 		s.teamRepo.CreateRoster(roster)
 	}
 
+	// Send Kafka event for team creation
+	if s.kafkaProducer != nil {
+		event := kafka.TeamEvent{
+			EventType:   kafka.TeamCreated,
+			TeamId:      team.TeamId,
+			PerformedBy: performedBy,
+			Timestamp:   time.Now(),
+		}
+		s.kafkaProducer.ProduceTeamEvent(event)
+	}
+
 	return map[string]interface{}{
 		"teamId":   team.TeamId,
 		"teamName": team.TeamName,
@@ -62,30 +77,100 @@ func (s *teamService) CreateTeam(teamName string, managers []entities.Manager, m
 	}, nil
 }
 
-func (s *teamService) AddMember(teamID uint, memberID string) error {
+func (s *teamService) AddMember(teamID uint, memberID string, performedBy string) error {
 	roster := &entities.Roster{
 		TeamId:   teamID,
 		UserId:   memberID,
 		IsLeader: false,
 	}
-	return s.teamRepo.CreateRoster(roster)
+
+	err := s.teamRepo.CreateRoster(roster)
+	if err != nil {
+		return err
+	}
+
+	// Send Kafka event for member addition
+	if s.kafkaProducer != nil {
+		event := kafka.TeamEvent{
+			EventType:    kafka.MemberAdded,
+			TeamId:       teamID,
+			PerformedBy:  performedBy,
+			TargetUserId: memberID,
+			Timestamp:    time.Now(),
+		}
+		s.kafkaProducer.ProduceTeamEvent(event)
+	}
+
+	return nil
 }
 
-func (s *teamService) DeleteMember(teamID uint, memberID string) error {
-	return s.teamRepo.DeleteRoster(teamID, memberID, false)
+func (s *teamService) DeleteMember(teamID uint, memberID string, performedBy string) error {
+	err := s.teamRepo.DeleteRoster(teamID, memberID, false)
+	if err != nil {
+		return err
+	}
+
+	// Send Kafka event for member removal
+	if s.kafkaProducer != nil {
+		event := kafka.TeamEvent{
+			EventType:    kafka.MemberRemoved,
+			TeamId:       teamID,
+			PerformedBy:  performedBy,
+			TargetUserId: memberID,
+			Timestamp:    time.Now(),
+		}
+		s.kafkaProducer.ProduceTeamEvent(event)
+	}
+
+	return nil
 }
 
-func (s *teamService) AddManager(teamID uint, managerID string) error {
+func (s *teamService) AddManager(teamID uint, managerID string, performedBy string) error {
 	roster := &entities.Roster{
 		TeamId:   teamID,
 		UserId:   managerID,
 		IsLeader: true,
 	}
-	return s.teamRepo.CreateRoster(roster)
+
+	err := s.teamRepo.CreateRoster(roster)
+	if err != nil {
+		return err
+	}
+
+	// Send Kafka event for manager addition
+	if s.kafkaProducer != nil {
+		event := kafka.TeamEvent{
+			EventType:    kafka.ManagerAdded,
+			TeamId:       teamID,
+			PerformedBy:  performedBy,
+			TargetUserId: managerID,
+			Timestamp:    time.Now(),
+		}
+		s.kafkaProducer.ProduceTeamEvent(event)
+	}
+
+	return nil
 }
 
-func (s *teamService) DeleteManager(teamID uint, managerID string) error {
-	return s.teamRepo.DeleteRoster(teamID, managerID, true)
+func (s *teamService) DeleteManager(teamID uint, managerID string, performedBy string) error {
+	err := s.teamRepo.DeleteRoster(teamID, managerID, true)
+	if err != nil {
+		return err
+	}
+
+	// Send Kafka event for manager removal
+	if s.kafkaProducer != nil {
+		event := kafka.TeamEvent{
+			EventType:    kafka.ManagerRemoved,
+			TeamId:       teamID,
+			PerformedBy:  performedBy,
+			TargetUserId: managerID,
+			Timestamp:    time.Now(),
+		}
+		s.kafkaProducer.ProduceTeamEvent(event)
+	}
+
+	return nil
 }
 
 // Helper function to parse string to uint
