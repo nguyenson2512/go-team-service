@@ -66,6 +66,7 @@ func main() {
 	}
 	teamCache := cache.NewRedisTeamCache(redisAddr, "", 0)
 	assetCache := cache.NewRedisAssetCache(redisAddr, "", 0)
+	accessControlCache := cache.NewRedisAccessControlCache(redisAddr, "", 0)
 
 	// Initialize repositories
 	folderRepo := repository.NewFolderRepository(database)
@@ -79,7 +80,7 @@ func main() {
 	kafkaConsumer := kafka.NewTeamEventConsumer(kafkaBrokersList, kafkaTopic, "team-service-consumer", eventRepo, teamCache)
 	defer kafkaConsumer.Close()
 
-	assetConsumer := kafka.NewAssetEventConsumer(kafkaBrokersList, assetTopic, "asset-service-consumer", assetCache, assetEventRepo)
+	assetConsumer := kafka.NewAssetEventConsumer(kafkaBrokersList, assetTopic, "asset-service-consumer", assetCache, accessControlCache, assetEventRepo)
 	defer assetConsumer.Close()
 
 	// Start consumers in goroutines
@@ -87,8 +88,8 @@ func main() {
 	go assetConsumer.Consume(context.Background())
 
 	// Initialize use cases/services
-	folderService := usecases.NewFolderService(folderRepo, noteRepo, shareRepo, assetCache, assetProducer, database)
-	noteService := usecases.NewNoteService(noteRepo, folderRepo, shareRepo, assetCache, assetProducer, database)
+	folderService := usecases.NewFolderService(folderRepo, noteRepo, shareRepo, assetCache, accessControlCache, assetProducer, database)
+	noteService := usecases.NewNoteService(noteRepo, folderRepo, shareRepo, assetCache, accessControlCache, assetProducer, database)
 	shareService := usecases.NewShareService(shareRepo, folderRepo, noteRepo, teamRepo, teamCache, assetProducer, database)
 	teamService := usecases.NewTeamService(teamRepo, kafkaProducer)
 

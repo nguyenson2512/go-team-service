@@ -26,7 +26,7 @@ const (
 	NoteCreated   AssetEventType = "NOTE_CREATED"
 	NoteUpdated   AssetEventType = "NOTE_UPDATED"
 	NoteDeleted   AssetEventType = "NOTE_DELETED"
-	
+
 	// Asset sharing events
 	FolderShared   AssetEventType = "FOLDER_SHARED"
 	FolderUnshared AssetEventType = "FOLDER_UNSHARED"
@@ -45,12 +45,14 @@ type TeamEvent struct {
 
 // AssetEvent represents an asset change event
 type AssetEvent struct {
-	EventType AssetEventType `json:"eventType"`
-	AssetType string         `json:"assetType"` // "folder" or "note"
-	AssetId   string         `json:"assetId"`   // Changed to string to match UUID requirement
-	OwnerId   string         `json:"ownerId"`
-	ActionBy  string         `json:"actionBy"`
-	Timestamp time.Time      `json:"timestamp"`
+	EventType    AssetEventType `json:"eventType"`
+	AssetType    string         `json:"assetType"` // "folder" or "note"
+	AssetId      string         `json:"assetId"`   // Changed to string to match UUID requirement
+	OwnerId      string         `json:"ownerId"`
+	ActionBy     string         `json:"actionBy"`
+	TargetUserId string         `json:"targetUserId,omitempty"`
+	AccessType   string         `json:"accessType,omitempty"`
+	Timestamp    time.Time      `json:"timestamp"`
 }
 
 // TeamEventProducer interface for producing team events

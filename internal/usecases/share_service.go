@@ -121,12 +121,14 @@ func (s *shareService) ShareFolder(folderID uint, targetUserID, access, ownerID 
 	// Send asset event for folder sharing
 	if s.assetProducer != nil {
 		event := kafka.AssetEvent{
-			EventType: kafka.FolderShared,
-			AssetType: "folder",
-			AssetId:   fmt.Sprintf("%d", folderID),
-			OwnerId:   folder.OwnerID,
-			ActionBy:  ownerID,
-			Timestamp: time.Now(),
+			EventType:    kafka.FolderShared,
+			AssetType:    "folder",
+			AssetId:      fmt.Sprintf("%d", folderID),
+			OwnerId:      folder.OwnerID,
+			ActionBy:     ownerID,
+			TargetUserId: targetUserID,
+			AccessType:   access,
+			Timestamp:    time.Now(),
 		}
 		s.assetProducer.ProduceAssetEvent(event)
 	}
@@ -199,12 +201,14 @@ func (s *shareService) ShareNote(noteID uint, targetUserID, access, ownerID stri
 	// Send asset event for note sharing
 	if s.assetProducer != nil {
 		event := kafka.AssetEvent{
-			EventType: kafka.NoteShared,
-			AssetType: "note",
-			AssetId:   fmt.Sprintf("%d", noteID),
-			OwnerId:   note.OwnerID,
-			ActionBy:  ownerID,
-			Timestamp: time.Now(),
+			EventType:    kafka.NoteShared,
+			AssetType:    "note",
+			AssetId:      fmt.Sprintf("%d", noteID),
+			OwnerId:      note.OwnerID,
+			ActionBy:     ownerID,
+			TargetUserId: targetUserID,
+			AccessType:   access,
+			Timestamp:    time.Now(),
 		}
 		s.assetProducer.ProduceAssetEvent(event)
 	}
@@ -270,7 +274,6 @@ func (s *shareService) GetTeamAssets(teamID uint) (map[string]interface{}, error
 			return nil, errors.New("failed to fetch team members")
 		}
 	}
-
 
 	if len(userIds) == 0 {
 		return map[string]interface{}{

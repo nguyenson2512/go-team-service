@@ -14,13 +14,14 @@ import (
 
 // AssetEventConsumer represents a Kafka consumer for asset events
 type AssetEventConsumer struct {
-	reader      *kafka.Reader
-	assetCache  cache.AssetCache
-	eventRepo   repository.AssetEventRepository
+	reader             *kafka.Reader
+	assetCache         cache.AssetCache
+	accessControlCache cache.AccessControlCache
+	eventRepo          repository.AssetEventRepository
 }
 
 // NewAssetEventConsumer creates a new Kafka consumer for asset events
-func NewAssetEventConsumer(brokers []string, topic string, groupID string, assetCache cache.AssetCache, eventRepo repository.AssetEventRepository) *AssetEventConsumer {
+func NewAssetEventConsumer(brokers []string, topic string, groupID string, assetCache cache.AssetCache, accessControlCache cache.AccessControlCache, eventRepo repository.AssetEventRepository) *AssetEventConsumer {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: brokers,
 		Topic:   topic,
@@ -28,9 +29,10 @@ func NewAssetEventConsumer(brokers []string, topic string, groupID string, asset
 	})
 
 	return &AssetEventConsumer{
-		reader:     reader,
-		assetCache: assetCache,
-		eventRepo:  eventRepo,
+		reader:             reader,
+		assetCache:         assetCache,
+		accessControlCache: accessControlCache,
+		eventRepo:          eventRepo,
 	}
 }
 
@@ -94,10 +96,28 @@ func (c *AssetEventConsumer) Consume(ctx context.Context) {
 							}
 						}
 					}
-				case FolderCreated, FolderUpdated, NoteCreated, NoteUpdated, FolderShared, FolderUnshared, NoteShared, NoteUnshared:
+				case FolderCreated, FolderUpdated, NoteCreated, NoteUpdated:
 					// These events are handled by write-through caching in the services
 					// The cache is already updated when the DB operation succeeds
 					log.Printf("Asset event %s handled by write-through caching", event.EventType)
+				case FolderShared, NoteShared:
+					// Update ACL in Redis
+					if c.accessControlCache != nil && event.TargetUserId != "" && event.AccessType != "" {
+						if err := c.accessControlCache.SetAssetAccess(ctx, event.AssetId, event.TargetUserId, event.AccessType); err != nil {
+							log.Printf("Failed to update ACL in Redis for asset %s: %v", event.AssetId, err)
+						} else {
+							log.Printf("Updated ACL in Redis for asset %s, user %s, access %s", event.AssetId, event.TargetUserId, event.AccessType)
+						}
+					}
+				case FolderUnshared, NoteUnshared:
+					// Remove access from ACL in Redis
+					if c.accessControlCache != nil && event.TargetUserId != "" {
+						if err := c.accessControlCache.RemoveAssetAccess(ctx, event.AssetId, event.TargetUserId); err != nil {
+							log.Printf("Failed to remove ACL in Redis for asset %s: %v", event.AssetId, err)
+						} else {
+							log.Printf("Removed ACL in Redis for asset %s, user %s", event.AssetId, event.TargetUserId)
+						}
+					}
 				}
 			}
 		}
@@ -107,4 +127,4 @@ func (c *AssetEventConsumer) Consume(ctx context.Context) {
 // Close closes the asset event consumer
 func (c *AssetEventConsumer) Close() error {
 	return c.reader.Close()
-} 
+}

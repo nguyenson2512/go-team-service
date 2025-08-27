@@ -21,20 +21,22 @@ type FolderService interface {
 }
 
 type folderService struct {
-	folderRepo      repository.FolderRepository
-	noteRepo        repository.NoteRepository
-	shareRepo       repository.ShareRepository
-	cache           cache.AssetCache
-	assetProducer   kafka.AssetEventProducer
-	db              *gorm.DB
+	folderRepo    repository.FolderRepository
+	noteRepo      repository.NoteRepository
+	shareRepo     repository.ShareRepository
+	cache         cache.AssetCache
+	accessControl cache.AccessControlCache
+	assetProducer kafka.AssetEventProducer
+	db            *gorm.DB
 }
 
-func NewFolderService(folderRepo repository.FolderRepository, noteRepo repository.NoteRepository, shareRepo repository.ShareRepository, cache cache.AssetCache, assetProducer kafka.AssetEventProducer, db *gorm.DB) FolderService {
+func NewFolderService(folderRepo repository.FolderRepository, noteRepo repository.NoteRepository, shareRepo repository.ShareRepository, cache cache.AssetCache, accessControl cache.AccessControlCache, assetProducer kafka.AssetEventProducer, db *gorm.DB) FolderService {
 	return &folderService{
 		folderRepo:    folderRepo,
 		noteRepo:      noteRepo,
 		shareRepo:     shareRepo,
 		cache:         cache,
+		accessControl: accessControl,
 		assetProducer: assetProducer,
 		db:            db,
 	}
@@ -78,7 +80,7 @@ func (s *folderService) CreateFolder(name, ownerID string) (*entities.Folder, er
 
 func (s *folderService) GetFolder(id uint, userID string) (*entities.Folder, error) {
 	ctx := context.Background()
-	
+
 	// Try cache first
 	if s.cache != nil {
 		cachedFolder, err := s.cache.GetFolder(ctx, id)
@@ -87,7 +89,15 @@ func (s *folderService) GetFolder(id uint, userID string) (*entities.Folder, err
 			if cachedFolder.OwnerID == userID {
 				return cachedFolder, nil
 			}
-			// If not owner, check if user has access via shares
+			// If not owner, check if user has access via ACL in Redis first
+			if s.accessControl != nil {
+				accessType, err := s.accessControl.GetAssetAccess(ctx, fmt.Sprintf("%d", id), userID)
+				if err == nil && accessType != "" {
+					// User has access via ACL
+					return cachedFolder, nil
+				}
+			}
+			// Fallback to DB check if not in ACL
 			share, err := s.shareRepo.GetFolderShare(id, userID)
 			if err == nil && share != nil {
 				return cachedFolder, nil
@@ -119,7 +129,30 @@ func (s *folderService) UpdateFolder(id uint, name, userID string) (*entities.Fo
 	}
 
 	if folder.OwnerID != userID {
-		return nil, errors.New("not authorized or folder not found")
+		// Check if user has access via ACL in Redis first
+		if s.accessControl != nil {
+			ctx := context.Background()
+			accessType, err := s.accessControl.GetAssetAccess(ctx, fmt.Sprintf("%d", id), userID)
+			if err == nil && accessType != "" {
+				// User has access via ACL
+				if accessType != "write" {
+					return nil, errors.New("write permission required")
+				}
+				// User has write access, continue with update
+			} else {
+				// Fallback to DB check if not in ACL
+				share, err := s.shareRepo.GetFolderShare(id, userID)
+				if err != nil || share == nil || share.Access != "write" {
+					return nil, errors.New("not authorized or folder not found")
+				}
+			}
+		} else {
+			// Fallback to DB check if no access control cache
+			share, err := s.shareRepo.GetFolderShare(id, userID)
+			if err != nil || share == nil || share.Access != "write" {
+				return nil, errors.New("not authorized or folder not found")
+			}
+		}
 	}
 
 	folder.Name = name
@@ -160,7 +193,36 @@ func (s *folderService) DeleteFolder(id uint, userID string) error {
 	}
 
 	if folder.OwnerID != userID {
-		return errors.New("not authorized or folder not found")
+		// Check if user has access via ACL in Redis first
+		if s.accessControl != nil {
+			ctx := context.Background()
+			accessType, err := s.accessControl.GetAssetAccess(ctx, fmt.Sprintf("%d", id), userID)
+			if err == nil && accessType != "" {
+				// User has access via ACL
+				if accessType != "write" {
+					return errors.New("write permission required")
+				}
+				// User has write access, continue with delete
+			} else {
+				// Fallback to DB check if not in ACL
+				share, err := s.shareRepo.GetFolderShare(id, userID)
+				if err != nil || share == nil {
+					return errors.New("not authorized or folder not found")
+				}
+				if share.Access != "write" {
+					return errors.New("write permission required")
+				}
+			}
+		} else {
+			// Fallback to DB check if no access control cache
+			share, err := s.shareRepo.GetFolderShare(id, userID)
+			if err != nil || share == nil {
+				return errors.New("not authorized or folder not found")
+			}
+			if share.Access != "write" {
+				return errors.New("write permission required")
+			}
+		}
 	}
 
 	// Use transaction to delete folder and all related data

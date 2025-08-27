@@ -25,16 +25,18 @@ type noteService struct {
 	folderRepo    repository.FolderRepository
 	shareRepo     repository.ShareRepository
 	cache         cache.AssetCache
+	accessControl cache.AccessControlCache
 	assetProducer kafka.AssetEventProducer
 	db            *gorm.DB
 }
 
-func NewNoteService(noteRepo repository.NoteRepository, folderRepo repository.FolderRepository, shareRepo repository.ShareRepository, cache cache.AssetCache, assetProducer kafka.AssetEventProducer, db *gorm.DB) NoteService {
+func NewNoteService(noteRepo repository.NoteRepository, folderRepo repository.FolderRepository, shareRepo repository.ShareRepository, cache cache.AssetCache, accessControl cache.AccessControlCache, assetProducer kafka.AssetEventProducer, db *gorm.DB) NoteService {
 	return &noteService{
 		noteRepo:      noteRepo,
 		folderRepo:    folderRepo,
 		shareRepo:     shareRepo,
 		cache:         cache,
+		accessControl: accessControl,
 		assetProducer: assetProducer,
 		db:            db,
 	}
@@ -90,7 +92,7 @@ func (s *noteService) CreateNote(title, body string, folderID uint, userID strin
 
 func (s *noteService) GetNote(id uint, userID string) (*entities.Note, error) {
 	ctx := context.Background()
-	
+
 	// Try cache first
 	if s.cache != nil {
 		cachedNote, err := s.cache.GetNote(ctx, id)
@@ -99,7 +101,15 @@ func (s *noteService) GetNote(id uint, userID string) (*entities.Note, error) {
 			if cachedNote.OwnerID == userID {
 				return cachedNote, nil
 			}
-			// If not owner, check if user has access via shares
+			// If not owner, check if user has access via ACL in Redis first
+			if s.accessControl != nil {
+				accessType, err := s.accessControl.GetAssetAccess(ctx, fmt.Sprintf("%d", id), userID)
+				if err == nil && accessType != "" {
+					// User has access via ACL
+					return cachedNote, nil
+				}
+			}
+			// Fallback to DB check if not in ACL
 			share, err := s.shareRepo.GetNoteShare(id, userID)
 			if err == nil && share != nil {
 				return cachedNote, nil
@@ -132,12 +142,35 @@ func (s *noteService) UpdateNote(id uint, title, body, userID string) (*entities
 
 	// Check ownership or write access
 	if note.OwnerID != userID {
-		share, err := s.shareRepo.GetNoteShare(note.ID, userID)
-		if err != nil {
-			return nil, errors.New("access denied")
-		}
-		if share.Access != "write" {
-			return nil, errors.New("write permission required")
+		// Check if user has access via ACL in Redis first
+		if s.accessControl != nil {
+			ctx := context.Background()
+			accessType, err := s.accessControl.GetAssetAccess(ctx, fmt.Sprintf("%d", note.ID), userID)
+			if err == nil && accessType != "" {
+				// User has access via ACL
+				if accessType != "write" {
+					return nil, errors.New("write permission required")
+				}
+				// User has write access, continue with update
+			} else {
+				// Fallback to DB check if not in ACL
+				share, err := s.shareRepo.GetNoteShare(note.ID, userID)
+				if err != nil {
+					return nil, errors.New("access denied")
+				}
+				if share.Access != "write" {
+					return nil, errors.New("write permission required")
+				}
+			}
+		} else {
+			// Fallback to DB check if no access control cache
+			share, err := s.shareRepo.GetNoteShare(note.ID, userID)
+			if err != nil {
+				return nil, errors.New("access denied")
+			}
+			if share.Access != "write" {
+				return nil, errors.New("write permission required")
+			}
 		}
 	}
 
@@ -181,7 +214,36 @@ func (s *noteService) DeleteNote(id uint, userID string) error {
 	}
 
 	if note.OwnerID != userID {
-		return errors.New("only owner can delete the note")
+		// Check if user has access via ACL in Redis first
+		if s.accessControl != nil {
+			ctx := context.Background()
+			accessType, err := s.accessControl.GetAssetAccess(ctx, fmt.Sprintf("%d", id), userID)
+			if err == nil && accessType != "" {
+				// User has access via ACL
+				if accessType != "write" {
+					return errors.New("write permission required")
+				}
+				// User has write access, continue with delete
+			} else {
+				// Fallback to DB check if not in ACL
+				share, err := s.shareRepo.GetNoteShare(id, userID)
+				if err != nil || share == nil {
+					return errors.New("only owner can delete the note")
+				}
+				if share.Access != "write" {
+					return errors.New("write permission required")
+				}
+			}
+		} else {
+			// Fallback to DB check if no access control cache
+			share, err := s.shareRepo.GetNoteShare(id, userID)
+			if err != nil || share == nil {
+				return errors.New("only owner can delete the note")
+			}
+			if share.Access != "write" {
+				return errors.New("write permission required")
+			}
+		}
 	}
 
 	// Use transaction to delete note and all related shares
