@@ -48,8 +48,16 @@ func main() {
 		kafkaTopic = "team.activity" // Default topic
 	}
 
+	assetTopic := os.Getenv("KAFKA_ASSET_ACTIVITY_TOPIC")
+	if assetTopic == "" {
+		assetTopic = "asset.changes" // Default topic
+	}
+
 	kafkaProducer := kafka.NewTeamEventProducer(kafkaBrokersList, kafkaTopic)
 	defer kafkaProducer.Close()
+
+	assetProducer := kafka.NewAssetEventProducer(kafkaBrokersList, assetTopic)
+	defer assetProducer.Close()
 
 	// Initialize Redis cache
 	redisAddr := os.Getenv("REDIS_ADDR")
@@ -57,25 +65,31 @@ func main() {
 		redisAddr = "redis:6379"
 	}
 	teamCache := cache.NewRedisTeamCache(redisAddr, "", 0)
-
-	// Initialize Kafka consumer
-	eventRepo := repository.NewTeamEventRepository(database)
-	kafkaConsumer := kafka.NewTeamEventConsumer(kafkaBrokersList, kafkaTopic, "team-service-consumer", eventRepo, teamCache)
-	defer kafkaConsumer.Close()
-
-	// Start consumer in a goroutine
-	go kafkaConsumer.Consume(context.Background())
+	assetCache := cache.NewRedisAssetCache(redisAddr, "", 0)
 
 	// Initialize repositories
 	folderRepo := repository.NewFolderRepository(database)
 	noteRepo := repository.NewNoteRepository(database)
 	shareRepo := repository.NewShareRepository(database)
 	teamRepo := repository.NewTeamRepository(database)
+	eventRepo := repository.NewTeamEventRepository(database)
+	assetEventRepo := repository.NewAssetEventRepository(database)
+
+	// Initialize Kafka consumer
+	kafkaConsumer := kafka.NewTeamEventConsumer(kafkaBrokersList, kafkaTopic, "team-service-consumer", eventRepo, teamCache)
+	defer kafkaConsumer.Close()
+
+	assetConsumer := kafka.NewAssetEventConsumer(kafkaBrokersList, assetTopic, "asset-service-consumer", assetCache, assetEventRepo)
+	defer assetConsumer.Close()
+
+	// Start consumers in goroutines
+	go kafkaConsumer.Consume(context.Background())
+	go assetConsumer.Consume(context.Background())
 
 	// Initialize use cases/services
-	folderService := usecases.NewFolderService(folderRepo, noteRepo, shareRepo, database)
-	noteService := usecases.NewNoteService(noteRepo, folderRepo, shareRepo, database)
-	shareService := usecases.NewShareService(shareRepo, folderRepo, noteRepo, teamRepo, teamCache, database)
+	folderService := usecases.NewFolderService(folderRepo, noteRepo, shareRepo, assetCache, assetProducer, database)
+	noteService := usecases.NewNoteService(noteRepo, folderRepo, shareRepo, assetCache, assetProducer, database)
+	shareService := usecases.NewShareService(shareRepo, folderRepo, noteRepo, teamRepo, teamCache, assetProducer, database)
 	teamService := usecases.NewTeamService(teamRepo, kafkaProducer)
 
 	// Initialize handlers

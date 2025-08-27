@@ -1,9 +1,14 @@
 package usecases
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"team-service/internal/entities"
+	"team-service/internal/kafka"
 	"team-service/internal/repository"
+	"team-service/pkg/cache"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -16,18 +21,22 @@ type NoteService interface {
 }
 
 type noteService struct {
-	noteRepo   repository.NoteRepository
-	folderRepo repository.FolderRepository
-	shareRepo  repository.ShareRepository
-	db         *gorm.DB
+	noteRepo      repository.NoteRepository
+	folderRepo    repository.FolderRepository
+	shareRepo     repository.ShareRepository
+	cache         cache.AssetCache
+	assetProducer kafka.AssetEventProducer
+	db            *gorm.DB
 }
 
-func NewNoteService(noteRepo repository.NoteRepository, folderRepo repository.FolderRepository, shareRepo repository.ShareRepository, db *gorm.DB) NoteService {
+func NewNoteService(noteRepo repository.NoteRepository, folderRepo repository.FolderRepository, shareRepo repository.ShareRepository, cache cache.AssetCache, assetProducer kafka.AssetEventProducer, db *gorm.DB) NoteService {
 	return &noteService{
-		noteRepo:   noteRepo,
-		folderRepo: folderRepo,
-		shareRepo:  shareRepo,
-		db:         db,
+		noteRepo:      noteRepo,
+		folderRepo:    folderRepo,
+		shareRepo:     shareRepo,
+		cache:         cache,
+		assetProducer: assetProducer,
+		db:            db,
 	}
 }
 
@@ -54,14 +63,64 @@ func (s *noteService) CreateNote(title, body string, folderID uint, userID strin
 		return nil, err
 	}
 
+	// Write-through: Update cache after successful DB write
+	if s.cache != nil {
+		ctx := context.Background()
+		if err := s.cache.SetNote(ctx, note); err != nil {
+			// Log cache error but don't fail the operation
+			_ = err
+		}
+	}
+
+	// Send asset event for note creation
+	if s.assetProducer != nil {
+		event := kafka.AssetEvent{
+			EventType: kafka.NoteCreated,
+			AssetType: "note",
+			AssetId:   fmt.Sprintf("%d", note.ID),
+			OwnerId:   note.OwnerID,
+			ActionBy:  userID,
+			Timestamp: time.Now(),
+		}
+		s.assetProducer.ProduceAssetEvent(event)
+	}
+
 	return note, nil
 }
 
 func (s *noteService) GetNote(id uint, userID string) (*entities.Note, error) {
+	ctx := context.Background()
+	
+	// Try cache first
+	if s.cache != nil {
+		cachedNote, err := s.cache.GetNote(ctx, id)
+		if err == nil && cachedNote != nil {
+			// Check access permissions for cached data
+			if cachedNote.OwnerID == userID {
+				return cachedNote, nil
+			}
+			// If not owner, check if user has access via shares
+			share, err := s.shareRepo.GetNoteShare(id, userID)
+			if err == nil && share != nil {
+				return cachedNote, nil
+			}
+		}
+	}
+
+	// Cache miss or access check failed, fallback to DB
 	note, err := s.noteRepo.GetByIDWithAccess(id, userID)
 	if err != nil {
 		return nil, err
 	}
+
+	// Update cache with fresh data
+	if s.cache != nil {
+		if err := s.cache.SetNote(ctx, note); err != nil {
+			// Log cache error but don't fail the operation
+			_ = err
+		}
+	}
+
 	return note, nil
 }
 
@@ -90,6 +149,28 @@ func (s *noteService) UpdateNote(id uint, title, body, userID string) (*entities
 		return nil, err
 	}
 
+	// Write-through: Update cache after successful DB write
+	if s.cache != nil {
+		ctx := context.Background()
+		if err := s.cache.SetNote(ctx, note); err != nil {
+			// Log cache error but don't fail the operation
+			_ = err
+		}
+	}
+
+	// Send asset event for note update
+	if s.assetProducer != nil {
+		event := kafka.AssetEvent{
+			EventType: kafka.NoteUpdated,
+			AssetType: "note",
+			AssetId:   fmt.Sprintf("%d", note.ID),
+			OwnerId:   note.OwnerID,
+			ActionBy:  userID,
+			Timestamp: time.Now(),
+		}
+		s.assetProducer.ProduceAssetEvent(event)
+	}
+
 	return note, nil
 }
 
@@ -104,7 +185,7 @@ func (s *noteService) DeleteNote(id uint, userID string) error {
 	}
 
 	// Use transaction to delete note and all related shares
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
 		// Delete note shares
 		if err := tx.Where("note_id = ?", note.ID).Delete(&entities.NoteShare{}).Error; err != nil {
 			return err
@@ -117,4 +198,32 @@ func (s *noteService) DeleteNote(id uint, userID string) error {
 
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Write-through: Invalidate cache after successful DB deletion
+	if s.cache != nil {
+		ctx := context.Background()
+		if err := s.cache.DeleteNote(ctx, id); err != nil {
+			// Log cache error but don't fail the operation
+			_ = err
+		}
+	}
+
+	// Send asset event for note deletion
+	if s.assetProducer != nil {
+		event := kafka.AssetEvent{
+			EventType: kafka.NoteDeleted,
+			AssetType: "note",
+			AssetId:   fmt.Sprintf("%d", id),
+			OwnerId:   note.OwnerID,
+			ActionBy:  userID,
+			Timestamp: time.Now(),
+		}
+		s.assetProducer.ProduceAssetEvent(event)
+	}
+
+	return nil
 }

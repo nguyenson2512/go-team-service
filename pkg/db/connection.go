@@ -22,6 +22,7 @@ func Connect(dsn string) (*gorm.DB, error) {
 		&entities.FolderShare{},
 		&entities.NoteShare{},
 		&entities.TeamEventRecord{},
+		&entities.AssetEventRecord{},
 	)
 	if err != nil {
 		log.Printf("Failed to migrate database: %v", err)
